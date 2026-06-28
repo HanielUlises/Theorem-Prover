@@ -5,6 +5,7 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
+#include <mdspan>
 #include <string_view>
 #include <unordered_map>
 #include <variant>
@@ -67,7 +68,9 @@ public:
     void clear()                { bindings_.clear(); }
 
     // Span view over all bindings for bulk iteration (e.g. model extraction).
-    auto entries() const noexcept { return std::span(bindings_.begin(), bindings_.end()); }
+    auto entries() const noexcept {
+        return bindings_ | std::views::values;
+    }
 
 private:
     // flat_map: contiguous sorted storage, better cache behaviour than
