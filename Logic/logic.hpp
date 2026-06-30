@@ -115,6 +115,15 @@ public:
     virtual TermPtr      dup   () const = 0;
     virtual TermPtr      apply (const Substitution& subst) const = 0;
     virtual std::string  to_string() const = 0;
+
+    // Sort-agnostic variable introspection. Every Term answers these two
+    // questions about itself without the caller needing to know which VarT<S>
+    // instantiation it might be; this is what lets chase() and the occurs
+    // check walk arbitrary term trees without a per-sort dynamic_cast ladder.
+    // Default implementation covers Constant and Complex (neither is a var);
+    // VarT<S> overrides both.
+    virtual std::optional<std::string_view> var_id_if_var() const noexcept { return std::nullopt; }
+    virtual bool contains_var(std::string_view var_id) const noexcept = 0;
 };
 
 // VarT<S> is a logic variable of sort S. The sort tag S is a phantom:
@@ -133,6 +142,9 @@ public:
     UnifyResult unify(const Term& other, Substitution& subst) const override;
     bool        match(const Term& other)                       const noexcept override;
     bool        eq   (const Term& other, const Substitution& subst) const noexcept override;
+
+    std::optional<std::string_view> var_id_if_var() const noexcept override { return id_; }
+    bool contains_var(std::string_view var_id) const noexcept override { return id_ == var_id; }
 
     TermPtr     dup  ()                            const override;
     TermPtr     apply(const Substitution& subst)   const override;
@@ -158,6 +170,9 @@ public:
     UnifyResult unify(const Term& other, Substitution& subst) const override;
     bool        match(const Term& other)                       const noexcept override;
     bool        eq   (const Term& other, const Substitution& subst) const noexcept override;
+
+    // Ground term: never contains any variable.
+    bool contains_var(std::string_view) const noexcept override { return false; }
 
     TermPtr     dup  ()                          const override;
     TermPtr     apply(const Substitution& subst) const override { return dup(); }
@@ -202,6 +217,10 @@ public:
     UnifyResult unify(const Term& other, Substitution& subst) const override;
     bool        match(const Term& other)                       const noexcept override;
     bool        eq   (const Term& other, const Substitution& subst) const noexcept override;
+
+    // True iff var_id occurs free in any argument, checked via std::ranges::any_of
+    // over the span rather than a hand-rolled loop.
+    bool contains_var(std::string_view var_id) const noexcept override;
 
     TermPtr     dup  ()                            const override;
     TermPtr     apply(const Substitution& subst)   const override;
