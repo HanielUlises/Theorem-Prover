@@ -5,7 +5,6 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
-#include <mdspan>
 #include <string_view>
 #include <unordered_map>
 #include <variant>
@@ -67,15 +66,19 @@ public:
     bool empty() const noexcept { return bindings_.empty(); }
     void clear()                { bindings_.clear(); }
 
-    // Span view over all bindings for bulk iteration (e.g. model extraction).
-    auto entries() const noexcept {
-        return bindings_ | std::views::values;
-    }
-
 private:
     // flat_map: contiguous sorted storage, better cache behaviour than
     // node-based unordered_map for the substitution sizes typical in SMT.
     std::flat_map<std::string, TermPtr> bindings_;
+
+public:
+    // View over bound terms for bulk iteration (e.g. model extraction).
+    // Returns auto deliberately: range views are designed to be consumed
+    // immediately in a range-for or piped into further views, not stored
+    // as a named member type. Callers needing to persist the result should
+    // materialize it (e.g. into a std::vector<TermPtr>) rather than store
+    // the view itself.
+    auto entries() const noexcept { return std::views::values(bindings_); }
 };
 
 // Term is the syntactic object of the logic. Subclasses are immutable after
@@ -293,31 +296,44 @@ struct Literal {
     bool       polarity;
 };
 
-// ClauseStore holds clauses in a flat byte-addressed block with an index
-// into starting offsets, approximating the SOA layout used in high-performance
-// CDCL solvers (MiniSat, CaDiCaL). The mdspan view exposes the literal matrix
-// for bulk operations like watched-literal scanning.
+// ClauseStore holds clauses in a single flat pool with an offset index,
+// the ragged-array layout used by real CDCL solvers (MiniSat, CaDiCaL):
+// literals of every clause sit contiguously in one buffer, and a clause is
+// just a (start, length) pair into it. This is preferred over a padded
+// rectangular layout because clause widths vary enormously after conflict-
+// driven learning — short learned clauses next to long input clauses — so
+// padding to max_width would waste memory proportional to that variance.
+// clause(idx) returns a zero-copy span directly into the pool.
 
 class ClauseStore {
 public:
     using LiteralSpan = std::span<const Literal>;
 
-    void         add_clause(std::vector<Literal> lits);
-    LiteralSpan  clause(std::size_t idx) const;
-    std::size_t  size()  const noexcept { return offsets_.size(); }
+    void add_clause(std::vector<Literal> lits) {
+        offsets_.push_back(literals_.size());
+        widths_.push_back(lits.size());
+        literals_.insert(literals_.end(),
+                          std::make_move_iterator(lits.begin()),
+                          std::make_move_iterator(lits.end()));
+    }
 
-    // Two-dimensional span view: clauses × max_width.
-    // Useful for SIMD-friendly watched-literal or resolution passes.
-    // Padding literals have polarity=false and a null atom.
-    auto matrix_view() const noexcept {
-        return std::mdspan(literals_.data(), offsets_.size(), max_width_);
+    LiteralSpan clause(std::size_t idx) const {
+        return LiteralSpan(literals_.data() + offsets_[idx], widths_[idx]);
+    }
+
+    std::size_t size() const noexcept { return offsets_.size(); }
+
+    // Range view over all clauses, for algorithms that sweep the whole
+    // database (e.g. unit propagation, restart-time clause deletion).
+    auto clauses() const noexcept {
+        return std::views::iota(std::size_t{0}, size())
+             | std::views::transform([this](std::size_t i) { return clause(i); });
     }
 
 private:
     std::vector<Literal>     literals_;
     std::vector<std::size_t> offsets_;
     std::vector<std::size_t> widths_;
-    std::size_t              max_width_ = 0;
 };
 
 // Model is the satisfying assignment returned by the SAT/SMT layer.
