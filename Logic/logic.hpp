@@ -59,7 +59,17 @@ using UnifyResult = std::expected<void, std::string>;
 
 class Substitution {
 public:
-    TermPtr    lookup(std::string_view var_id) const;
+    // optional rather than a possibly-null TermPtr: makes "unbound" an
+    // explicit case in the type rather than an implicit null check, and
+    // lets lookups compose with and_then/transform instead of branching.
+    std::optional<TermPtr> lookup(std::string_view var_id) const;
+
+    // Follows a chain of variable bindings to its end: if var_id is bound
+    // to another variable which is itself bound, keep walking. This is the
+    // textbook optional-monad walk — each step is lookup().and_then(next
+    // step), and the chain stops the moment any link is unbound.
+    std::optional<TermPtr> chase(std::string_view var_id) const;
+
     UnifyResult bind  (std::string_view var_id, TermPtr term);
     Substitution compose(const Substitution& other) const;
 
